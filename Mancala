@@ -1,7 +1,7 @@
 
 import java.util.Random;
 
-public class Mancala2 {
+public class Mancala {
 
     //Main features
     public final int[] LAYER_SIZE = {14, 16, 16, 16, 6};    //number of nodes per layer
