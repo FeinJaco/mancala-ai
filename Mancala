@@ -1,0 +1,413 @@
+
+import java.util.Random;
+
+public class Mancala2 {
+
+    //Main features
+    public final int[] LAYER_SIZE = {14, 16, 16, 16, 6};    //number of nodes per layer
+    public final int NET_COUNT = 100;   //number of neural nets
+    public final int GENERATIONS = 0;    //number of generations
+
+    //Rates
+    public final double MUT_RATE = 0.15; //fraction of genes mutated
+    public final double SURVIVAL_RATE = 0.6;  //fraction of nets to survive
+    public final double CHANGE_SIZE = 0.1;    //maximum mutation change
+    public final double SELECT_SCALE = 25;   //steepness of selection curve
+    public final double SIG_RATE = 1.3;   //horizontal scaling of sigmoid function
+    public final double WIN_TO_TURN = 0.8;    //ratio of wins to number of turns in fitness score
+
+    //Calculated final variablees
+    public final int LAYER_COUNT = LAYER_SIZE.length - 1;   //number of node layers
+    public final int SURVIVOR_COUNT = (int) (SURVIVAL_RATE * NET_COUNT); //number of neural nets that survive
+    public final int GAMES_PLAYED = 2 * NET_COUNT - 1;  //number of games played by each net per generation
+
+    //Weights
+    public double[][][][] weights = new double[NET_COUNT][LAYER_COUNT][][]; //net#,layer#,2ndNode#,1stNode#
+    public double[][][][] weightsRandom = new double[NET_COUNT][LAYER_COUNT][][];   //weights of original generation
+
+    public double[] avgTurns = new double[GENERATIONS + 1];  //array of average turn count in each generation (for survivors)
+    public double[] winRate = new double[GENERATIONS + 1];   //array of win rates for generation against original net
+    public int[] moveSum = new int[6];
+    public int[][] pit = new int[2][7];  //number of stones in each pit of gameboard
+    public int gen; //current generation
+    public int gameTurns;   //# of turns in game
+    public boolean doMutate;
+    /*
+    play against self & mutate if true; play against original gen for constant measure of generation success rate if false
+     */
+
+    public Random r = new Random();  //create object of Random
+
+    public static void main(String[] args) {
+        Mancala2 m = new Mancala2();    //create object of class
+        m.run();    //run program
+    }
+
+    public void run() {
+        //Stop program if inputs are invalid
+        if (MUT_RATE < 0 || MUT_RATE > 1 || SELECT_SCALE <= 1 || SURVIVAL_RATE < 0 || SURVIVAL_RATE > 1 || LAYER_SIZE[0] != 14 || LAYER_SIZE[LAYER_COUNT] != 6) {    //|| MAX_RATE < MIN_RATE || MAX_RATE > 1 
+            System.out.println("INVALID INPUT");
+            System.exit(0); //end program
+        }
+
+        initialGen();    //generate random weights (gen 0)
+
+        //loop through generations
+        for (gen = 0; gen <= GENERATIONS; gen++) {  //loop to maximum generations
+            //System.out.println("\nGENERATION " + gen);
+            generation(false);  //play generation against random generation (gen 0) to measure generation
+            generation(true);   //play generation against self and mutate the nets' weights
+        }
+
+        //loop through gens to print each's average turns per game and portion of games won against random gen 0
+        for (int iGen = 0; iGen <= GENERATIONS; iGen++) {
+            System.out.println(iGen + "\t" + avgTurns[iGen] + "\t" + winRate[iGen]);    //gen#,averageTurns,winRate
+        }
+        System.out.println();
+    }
+
+    //Generate random neural nets
+    public void initialGen() {
+        double random;  //random number from -1 to 1
+        for (int iNet = 0; iNet < NET_COUNT; iNet++) {  //loop through nets
+            for (int iLayer = 0; iLayer < LAYER_COUNT; iLayer++) {  //loop through node layers
+                weights[iNet][iLayer] = new double[LAYER_SIZE[iLayer + 1]][LAYER_SIZE[iLayer] + 1];  //set weight array size
+                weightsRandom[iNet][iLayer] = new double[LAYER_SIZE[iLayer + 1]][LAYER_SIZE[iLayer] + 1];  //set weight array size (gen 0)
+                //Each set of iNode2 and iNode1 coordinates store weights from iNode1 in iLayer - 1 to iNode2 in iLayer
+                for (int iNode2 = 0; iNode2 < LAYER_SIZE[iLayer + 1]; iNode2++) {   //loop through nodes in second layer
+                    for (int iNode1 = 0; iNode1 < LAYER_SIZE[iLayer] + 1; iNode1++) {   //loop through nodes in first layer
+                        random = random();    //generate random weight
+                        weights[iNet][iLayer][iNode2][iNode1] = random; //store weight
+                        weightsRandom[iNet][iLayer][iNode2][iNode1] = random; //store weight (gen 0)
+                    }
+                }
+            }
+        }
+    }
+
+    //Determine rank of neural nets
+    public void generation(boolean doMutate) {  //play against random gen (0)
+        this.doMutate = doMutate;   //set global doMutate to parameter doMutate
+        int[] wins = new int[NET_COUNT + 1];    //number of wins for each net (+ ties)
+        int[] turnsTot = new int[NET_COUNT];  //number of turns per tournament
+        int[] rank = new int[NET_COUNT];    //nets in order by rank
+        double[] fitness = new double[NET_COUNT]; //fitness scores for each net
+        int bestNet, winsTot = 0;    //best net so far, total wins in generation
+        int minTurns, maxTurns = 0, genTurns = 0;
+        double maxFit;  //fitness of bestNet, 
+        for (int iOut = 0; iOut < 6; iOut++) {
+            moveSum[iOut] = 0;
+        }
+
+        for (int net1 = 0; net1 < NET_COUNT; net1++) {
+            for (int net2 = 0; net2 < NET_COUNT; net2++) {
+                if (doMutate) {
+                    wins[Game(net1, net2)]++;
+                    turnsTot[net1] += gameTurns;
+                    turnsTot[net2] += gameTurns;
+                } else {
+                    if (Game(net1, net2) == 0) {
+                        wins[net1]++;
+                        turnsTot[net1]++;
+                    }
+                }
+            }
+        }
+
+        if (doMutate) {
+            //Generation statistics
+            System.out.print("\nNet\t");
+            for (int iNet = 0; iNet < NET_COUNT; iNet++) {
+                System.out.print(iNet + "\t");  //print net #s
+            }
+            System.out.print("\nWins\t");
+            for (int iNet = 0; iNet < NET_COUNT; iNet++) {
+                System.out.print(wins[iNet] + "\t");    //print win count for each net
+            }
+            minTurns = turnsTot[0]; //initialize minTurns to something within range of turnsTot
+            System.out.print("\nTurns\t");
+            for (int iNet = 0; iNet < NET_COUNT; iNet++) {
+                System.out.print(turnsTot[iNet] + "\t");    //print total turns each net took in that gen
+                //set new maxTurns if net has highest number of turns so far in loop
+                if (turnsTot[iNet] > maxTurns) {
+                    maxTurns = turnsTot[iNet];
+                }
+                //set new minTurns if net has lowest number of turns so far in loop
+                if (turnsTot[iNet] < minTurns) {
+                    minTurns = turnsTot[iNet];
+                }
+                genTurns += turnsTot[iNet];
+            }
+
+            //set fitness score for each net
+            for (int iNet = 0; iNet < NET_COUNT; iNet++) {
+                fitness[iNet] = WIN_TO_TURN * wins[iNet] / (double) GAMES_PLAYED + (1 - WIN_TO_TURN) * (1 - (turnsTot[iNet] - minTurns) / (double) (maxTurns - minTurns));
+            }
+
+            //rank nets
+            for (int iRank = 0; iRank < NET_COUNT; iRank++) {    //loop through each rank
+                maxFit = 0;    //reset max for this rank
+                bestNet = -1;   //reset bestNet for this rank
+                for (int iNet = 0; iNet < NET_COUNT; iNet++) {
+                    if (fitness[iNet] > maxFit || (fitness[iNet] == maxFit && r.nextInt(2) == 0)) {  //test if net has higher fitness than current maxFit
+                        maxFit = fitness[iNet];    //set maxFit to current net's fitness
+                        bestNet = iNet;  //set this net as the best remaining
+                    }
+                    //select a random winner if the number of turns and fitness score is the same
+                    //TODO: make this more fair (list of all tied nets and then random one is chosen from them)
+                }
+                rank[iRank] = bestNet;  //set rank[iRank] to the best remaining net
+                fitness[bestNet] = 0;   //clear fitness of current best net so it is not chosen again
+            }
+
+            System.out.print("\n\nRank: ");
+            for (int iRank = 0; iRank < NET_COUNT; iRank++) {
+                System.out.print(rank[iRank] + ",");
+                if (iRank >= SURVIVOR_COUNT)
+                    breed(rank[iRank], rank[select()], rank[select()]); //replace killed nets with newly generated nets from randomly matched parents
+                mutate(rank[iRank]);  //mutate net of rank iRank
+            }
+
+            avgTurns[gen] = (genTurns / (double) NET_COUNT) / (double) (GAMES_PLAYED);
+            System.out.println("\n");
+
+        } else {
+            for (int iNet = 0; iNet < NET_COUNT; iNet++) {
+                winsTot += wins[iNet];
+            }
+            winRate[gen] = winsTot / (double) (NET_COUNT * NET_COUNT);
+        }
+        for (int iOut = 0; iOut < 6; iOut++) {
+            System.out.println(moveSum[iOut]);
+        }
+        System.out.println();
+    }
+
+    public int Game(int p1, int p2) { //single game between two players (paired by Tournament class)
+        int playerTurn; //is it p1 or p2's turn? (1 or 2)
+        int playerNet = -1; //which net's turn is it?
+        int playerWin = -1; //winning player
+        int turnCount = 0;  //total number of turns so far
+
+        //Reset board to {4,4,4,4,4,4,0,4,4,4,4,4,4,0}
+        for (int iRow = 0; iRow < 2; iRow++) {
+            for (int iPit = 0; iPit < 6; iPit++) {
+                pit[iRow][iPit] = 4;    //fill pits with 4 stones each
+            }
+            pit[iRow][6] = 0;   //empty kalahs
+        }
+
+        //Game loop until someone wins
+        while (true) {
+            turnCount++;
+            playerTurn = turnCount % 2;  //playerTurn is 0 on player 1's turn and 1 on player 2's turn
+            if (playerTurn == 0) {
+                playerNet = p1;
+            }
+            if (playerTurn == 1) {
+                playerNet = p2;
+            }
+
+            //end game if a player wins
+            if (turn(playerTurn, playerNet)) {
+                break;
+            }
+        }
+
+        //adjust return values for non-mutating tournament
+        if (!doMutate) {
+            p1 = 0;
+            p2 = 1;
+
+        }
+
+        if (pit[0][6] > pit[1][6]) {
+            playerWin = p1;
+        }
+        if (pit[0][6] < pit[1][6]) {
+            playerWin = p2;
+        }
+        if (pit[0][6] == pit[1][6]) {
+            playerWin = NET_COUNT;
+        }
+        gameTurns = turnCount;
+        return playerWin;
+    }
+
+    public boolean turn(int turn, int netNow) {
+        int move, stones, row, pitNow, rowOpp, pitOpp;
+        int[] endSum = {0, 0};
+        boolean again = false;
+        do {
+            move = 0;
+            //Choose move
+            if (turn == 0 || doMutate) {
+                move = neuralNet(netNow, turn, weights);
+            } else {
+                move = neuralNet(netNow, turn, weightsRandom);
+                //move = r.nextInt(6);
+                moveSum[move]++;
+            }
+            //move = neuralNet(netNow, turn, array);
+
+            //Game logic
+            row = turn;
+            stones = pit[row][move];
+            pit[row][move] = 0;
+            pitNow = move;
+            while (stones >= 1) {
+                pitNow++;   //increase current pit number
+                //skip opponent kalah or starting pit
+                if ((pitNow == 6 && row != turn) || (pitNow == move && row == turn)) {
+                    pitNow++;
+                }
+                pitNow %= 7;    //loop back to beginning of row for row switch
+                if (pitNow == 0) {
+                    rowOpp = row;
+                    row = (row + 1) % 2;    //change row number
+                } else {
+                    rowOpp = (row + 1) % 2;
+                }
+                pitOpp = 5 - pitNow;
+                stones--;   //decrease stone total
+                if (stones == 0 && row == turn && pitNow != 6 && pit[row][pitNow] == 0 && pit[rowOpp][pitOpp] > 0) {
+                    pit[row][6] += pit[rowOpp][pitOpp] + 1;
+                    pit[rowOpp][pitOpp] = 0;
+                } else {
+                    pit[row][pitNow]++; //increase number of stones in pit
+                }
+            }
+            again = pitNow == 6 && row == turn; //set turn to happen again if landing in your kalah 
+            /*
+            //Display (optional, runs slowly)
+            System.out.println("Turn number: " + gameTurns);
+            System.out.println("Player: " + netNow + "\n--------------------------");
+            for (int i = 5; i >= 0; i--) {
+                System.out.print("\t" + pit[1][i]);
+            }
+            System.out.println("\n" + pit[1][6] + "\t\t\t\t\t\t\t" + pit[0][6]);
+            for (int i = 0; i < 6; i++) {
+                System.out.print("\t" + pit[0][i]);
+            }
+            System.out.println("\n\n");
+             */
+            endSum[0] = 0;
+            endSum[1] = 0;
+            for (int iRow = 0; iRow < 2; iRow++) {
+                for (int iPit = 0; iPit < 6; iPit++) {
+                    endSum[iRow] += pit[iRow][iPit];
+                }
+            }
+
+            for (int iRow = 0; iRow < 2; iRow++) {
+                //Add remaining stones into kalah
+                if (endSum[iRow] == 0) {
+                    rowOpp = (iRow + 1) % 2;
+                    pit[rowOpp][6] += endSum[rowOpp];
+                    again = false;
+                    break;
+                }
+            }
+        } while (again);
+
+        return endSum[0] == 0 || endSum[1] == 0;
+    }
+
+    public int neuralNet(int net, int boardRow, double weightsArr[][][][]) {
+        int choiceNow;
+        double maxNow, nodeOut;
+        double[][] node = new double[LAYER_COUNT][];
+
+        for (int iLayer = 0; iLayer < LAYER_COUNT; iLayer++) { //loop through layers starting with first hidden layer
+            node[iLayer] = new double[LAYER_SIZE[iLayer + 1]]; //array of nodes
+        }
+
+        //loop to calculate node values for first hidden layer
+        for (int iNode2 = 0; iNode2 < LAYER_SIZE[1]; iNode2++) {
+            for (int iNode1 = 0; iNode1 < 6; iNode1++) {    //loop through pits (excluding kalahs)
+                node[0][iNode2] += (pit[0][iNode1] / 16.0) * weightsArr[net][0][iNode2][iNode1];    //add (number of stones in pit / 16) * weight; 16 is arbitrary
+                node[0][iNode2] += (pit[1][iNode1] / 16.0) * weightsArr[net][0][iNode2][iNode1 + 7];
+            }
+            node[0][iNode2] += (pit[0][6] / 32.0) * weightsArr[net][0][iNode2][6];  //32 is arbitrary
+            node[0][iNode2] += (pit[1][6] / 32.0) * weightsArr[net][0][iNode2][13];
+            node[0][iNode2] += weightsArr[net][0][iNode2][14];
+            node[0][iNode2] = sigmoid(node[0][iNode2]);
+        }
+
+        //loop to calculate node values for remaining layers
+        for (int iLayer = 1; iLayer < LAYER_COUNT; iLayer++) {
+            for (int iNode2 = 0; iNode2 < LAYER_SIZE[iLayer + 1]; iNode2++) {
+                for (int iNode1 = 0; iNode1 < LAYER_SIZE[iLayer]; iNode1++) {    //loop through pits (excluding kalahs)
+                    node[iLayer][iNode2] += node[iLayer - 1][iNode1] * weightsArr[net][iLayer][iNode2][iNode1];
+                }
+                node[iLayer][iNode2] += weightsArr[net][iLayer][iNode2][LAYER_SIZE[iLayer]];
+                node[iLayer][iNode2] = sigmoid(node[iLayer][iNode2]);
+            }
+        }
+
+        //TODO: Handle equal outputs
+        //Rank pit choices based on outputs (sort array)
+        for (int i = 0; i < 6; i++) {   //loop 6 times
+            maxNow = -1;
+            choiceNow = 6;
+            for (int iOut = 0; iOut < 6; iOut++) { //loop through outputs
+                nodeOut = node[LAYER_COUNT - 1][iOut];
+                if (nodeOut > maxNow || nodeOut == maxNow && r.nextInt(2) == 0) {
+                    maxNow = nodeOut;
+                    choiceNow = iOut;
+                }
+            }
+
+            if (pit[boardRow][choiceNow] != 0) {
+                return choiceNow;
+            }
+            node[LAYER_COUNT - 1][choiceNow] = -1;
+        }
+
+        System.out.println("COUNTED WRONG");
+        System.exit(0);
+        return -1;
+    }
+
+    public double sigmoid(double num) {
+        return 2 / (double) ((1 + Math.exp(-SIG_RATE * (num)))) - 1;
+    }
+
+    public int select() {
+        return (int) (SURVIVOR_COUNT * ((Math.pow(SELECT_SCALE, r.nextDouble()) - 1) / (double) (SELECT_SCALE - 1)));
+    }
+
+    public void breed(int net, int mate1, int mate2) {
+        for (int iLayer = 0; iLayer < LAYER_COUNT; iLayer++) {  //loop through node layers
+            for (int iNode2 = 0; iNode2 < LAYER_SIZE[iLayer + 1]; iNode2++) {   //loop through nodes in second layer
+                for (int iNode1 = 0; iNode1 < LAYER_SIZE[iLayer] + 1; iNode1++) {   //loop through nodes in first layer
+                    if (r.nextInt(2) == 0) {
+                        weights[net][iLayer][iNode2][iNode1] = weights[mate1][iLayer][iNode2][iNode1]; //store weight
+                    } else {
+                        weights[net][iLayer][iNode2][iNode1] = weights[mate2][iLayer][iNode2][iNode1]; //store weight
+                    }
+                }
+            }
+        }
+    }
+
+    public void mutate(int n) {
+        //generate new values for each weight if random double is lower than the rate
+        for (int iLayer = 0; iLayer < LAYER_COUNT; iLayer++) {
+            for (int iNode2 = 0; iNode2 < LAYER_SIZE[iLayer + 1]; iNode2++) {
+                for (int iNode1 = 0; iNode1 < LAYER_SIZE[iLayer]; iNode1++) {
+                    if (r.nextDouble() < MUT_RATE) {
+                        weights[n][iLayer][iNode2][iNode1] += random() * CHANGE_SIZE;
+                        if (Math.abs((weights[n][iLayer][iNode2][iNode1])) > 1) {
+                            weights[n][iLayer][iNode2][iNode1] = (int) weights[n][iLayer][iNode2][iNode1];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    public double random() {
+        return r.nextDouble() * 2 - 1;
+    }
+}
