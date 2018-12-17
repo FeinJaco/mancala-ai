@@ -39,7 +39,7 @@ public class Mancala {
     public Random r = new Random();  //create object of Random
 
     public static void main(String[] args) {
-        Mancala2 m = new Mancala2();    //create object of class
+        Mancala m = new Mancala();    //create object of class
         m.run();    //run program
     }
 
